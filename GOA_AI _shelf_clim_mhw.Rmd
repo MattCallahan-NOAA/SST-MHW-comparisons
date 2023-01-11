@@ -387,7 +387,7 @@ sst<-sst %>% rename_with(tolower)   %>%
 #function to detect mhw events for each region and depth strata
 mhwfun<- function(x, region, strata) {
   (detect_event(ts2clm(x %>% filter(ecosystem_sub==region & depth_strata==strata)%>%
-         arrange(t), climatologyPeriod = c("1985-01-01", "2014-12-31"))))$clim %>%
+         arrange(t), climatologyPeriod = c("1982-01-01", "2011-12-31"))))$clim %>%
     mutate(ecosystem_sub=region, depth_strata=strata)
 }
 
