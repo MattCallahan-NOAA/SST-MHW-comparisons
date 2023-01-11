@@ -16,7 +16,7 @@ Finally we calculate heatwave status for each depth strata/subregion
 Here we calculate daily average SST for GOA and AI ESR subregions. 
 
 **connect to AKFIN**
-```{r, eval=FALSE}
+```{r, eval=FALSE, include=FALSE}
 library(odbc)
 library(tidyverse)
 library(getPass)
@@ -26,7 +26,7 @@ con <- dbConnect(odbc::odbc(), "akfin", UID=getPass(msg="USER NAME"), PWD=getPas
 ```
 
 **query SST**
-```{r, eval=FALSE}
+```{r, eval=FALSE, include=FALSE}
 #extend timeout
 
 #-10 to -200
@@ -82,9 +82,19 @@ library(sf)
 library(akmarineareas2)
 library(tidyverse)
 
+#original version that included aleutians
+# lkp<-readRDS("data/crw_spatial_lookup.RDS") %>%
+#   rename_with(tolower)%>%
+#   filter(depth <= -10 & ecosystem %in% c("Gulf of Alaska", "Aleutian Islands")) %>%
+#   mutate(depth_strata=ifelse(depth>=-200, "-10 to -200", ifelse(depth>= -1000, "-201 to -1000", "< -1000")),
+#          lon360=ifelse(longitude>0, longitude, longitude+360))%>%
+#   st_as_sf(coords = c('longitude', 'latitude'), crs = 4326, agr = 'constant') %>%
+#   st_transform(crs=3338)
+
+#New version with just GOA
 lkp<-readRDS("data/crw_spatial_lookup.RDS") %>%
   rename_with(tolower)%>%
-  filter(depth <= -10 & ecosystem %in% c("Gulf of Alaska", "Aleutian Islands")) %>%
+  filter(depth <= -10 & ecosystem =="Gulf of Alaska") %>%
   mutate(depth_strata=ifelse(depth>=-200, "-10 to -200", ifelse(depth>= -1000, "-201 to -1000", "< -1000")),
          lon360=ifelse(longitude>0, longitude, longitude+360))%>%
   st_as_sf(coords = c('longitude', 'latitude'), crs = 4326, agr = 'constant') %>%
@@ -94,9 +104,9 @@ lkp<-readRDS("data/crw_spatial_lookup.RDS") %>%
 ggplot()+
  # geom_sf(data=ak_dd%>%st_shift_longitude())+
   #geom_point(data=lkp, aes(x=lon360, y= latitude, color=depth_strata, fill= depth_strata))+
-  geom_sf(data=lkp, aes(color=depth_strata, fill= depth_strata), size=0.01)+
+  geom_sf(data=lkp, aes(color=depth_strata, fill= depth_strata), size=0.1)+
   geom_sf(data=esr%>%
-            filter(Ecosystem_Area%in%c("Gulf of Alaska", "Aleutian Islands")), 
+            filter(Ecosystem_Area == "Gulf of Alaska"), 
           color="black", fill=NA)+
    scale_x_continuous(breaks = seq(0, 360, 10))+
   theme_bw()
@@ -120,7 +130,7 @@ lkp%>%
 ## Plot subregional climatology by depth
 First the GOA. This plot shows the average daily temperature for each region by depth. Solid lines are mean temps and dotted lines are standard deviations.
 
-```{r}
+```{r, message = FALSE, warning=FALSE}
 #load data from previous step
 sst_10_200<-readRDS("data/sst_10_200.RDS")
 sst_201_1000<-readRDS("data/sst_201_1000.RDS")
@@ -153,12 +163,13 @@ sst_sum%>%
                    date_labels = "%b",
                    expand = c(0.025,0.025)) + 
   xlab("date")+
+  ylab("CRWSST")
   theme_bw()
 ```
 
 Next the Aleutians
 
-```{r}
+```{r, include = FALSE}
 #plot ai
 sst_sum%>%
   filter(ecosystem_sub%in% c("Western Aleutians", "Central Aleutians", "Eastern Aleutians"))%>%
@@ -176,9 +187,10 @@ sst_sum%>%
 ```
 ## Marine heatwave calculations
 Here I plot presence and absence of heatwaves over time for each of the subregions and deoth 
-```{r}
+```{r, message = FALSE, warning=FALSE}
 #prepare sst data for heatwaveR code
 sst<-sst %>% rename_with(tolower)   %>%
+  filter(ecosystem_sub %in% c("Eastern Gulf of Alaska", "Western Gulf of Alaska"))%>%
          mutate(t=as.Date(read_date,format="%Y-%m-%d"),
                 temp=mean_sst)
 
@@ -218,7 +230,7 @@ mhwplotfun<-function(x, region){
   facet_grid(rows=vars(depth_strata))+
   scale_color_manual(values=c("white", "#ffc866"))+
    #  scale_fill_manual(values=c("white", hcol))+
-    ggtitle(paste0(region," heatwaves"))+
+    ggtitle(paste0(region," heatwaves-CRWSST"))+
     scale_x_date(#limits=c(xmin, xmax), 
                  expand = c(0, 0))+
   theme(legend.position = "none",
@@ -235,29 +247,199 @@ ggplot(mhw_clim%>%filter(ecosystem_sub=="Eastern Gulf of Alaska"), aes(t, temp-s
     geom_line()
 
 #test
-mhwplotfun(mhw_clim, "Eastern Gulf of Alaska")
+#mhwplotfun(mhw_clim, "Eastern Gulf of Alaska")
 
 #plot all
 for (i in eco_vec) {
   print(mhwplotfun(x=mhw_clim, region=i))
 }
 
-
-#sorting out data problems
- 
-ggplot()+
-  geom_line(data=mhw_clim, aes(x=t, y=temp-seas))+
-  facet_grid(rows=vars(depth_strata), cols=vars(ecosystem_sub))
-
-sst_10_200<-sst_10_200%>% mutate(year=year(READ_DATE))
-
-unique(sst_10_200$year)
-
-#identify missing dates
-sst%>%mutate(year=year(read_date))%>%filter(year<2015)%>%summarise(error_start=max(read_date))
-
-sst%>%mutate(year=year(read_date))%>%filter(year>2015)%>%summarise(error_end=min(read_date))
              
 ```
 
+## COMPARISON WITH OISST
 
+```{r, eval=FALSE, include=FALSE}
+#extend timeout
+
+#-10 to -200
+oi_10_200<- dbFetch(dbSendQuery(con,
+                           paste0("select b.ecosystem_sub, a.read_date, avg(a.temp) oi_sst from afsc.erddap_oi_sst a
+left join afsc.erddap_oi_sst_spatial_lookup b on a.oi_id = b.id
+where b.depth between -200 and -10
+and b.ecosystem = 'Gulf of Alaska'
+group by b.ecosystem_sub, a.read_date
+order by b.ecosystem_sub, a.read_date")))
+
+oi_10_200<-oi_10_200 %>% mutate(depth_strata="-10 to -200")
+
+saveRDS(oi_10_200, "data/oi_10_200.RDS")
+
+#-201 to -1000
+oi_201_1000<- dbFetch(dbSendQuery(con,
+                           paste0("select b.ecosystem_sub, a.read_date, avg(a.temp) oi_sst from afsc.erddap_oi_sst a
+left join afsc.erddap_oi_sst_spatial_lookup b on a.oi_id = b.id
+where b.depth between -1000 and -201
+and b.ecosystem = 'Gulf of Alaska'
+group by b.ecosystem_sub, a.read_date
+order by b.ecosystem_sub, a.read_date")))
+
+oi_201_1000<-oi_201_1000 %>% mutate(depth_strata="-201 to -1000")
+
+saveRDS(oi_201_1000, "data/oi_201_1000.RDS")
+
+# >1000
+oi_1001<- dbFetch(dbSendQuery(con,
+                           paste0("select b.ecosystem_sub, a.read_date, avg(a.temp) oi_sst from afsc.erddap_oi_sst a
+left join afsc.erddap_oi_sst_spatial_lookup b on a.oi_id = b.id
+where b.depth < -1000
+and b.ecosystem = 'Gulf of Alaska'
+group by b.ecosystem_sub, a.read_date")))
+
+oi_1001<-oi_1001 %>% mutate(depth_strata="< -1000")
+
+saveRDS(oi_1001, "data/oi_1001.RDS")
+
+#spatial lookup table for plotting
+dbFetch(dbSendQuery(con, paste0("select* from afsc.erddap_oi_sst_spatial_lookup"))) %>%
+  saveRDS("data/oi_spatial_lookup.RDS")
+```
+
+```{r, message = FALSE, warning=FALSE}
+#New version with just GOA
+lkp<-readRDS("data/oi_spatial_lookup.RDS") %>%
+  rename_with(tolower)%>%
+  filter(depth <= -10 & ecosystem =="Gulf of Alaska") %>%
+  mutate(depth_strata=ifelse(depth>=-200, "-10 to -200", ifelse(depth>= -1000, "-201 to -1000", "< -1000")),
+         lon360=ifelse(longitude>0, longitude, longitude+360))%>%
+  st_as_sf(coords = c('longitude', 'latitude'), crs = 4326, agr = 'constant') %>%
+  st_transform(crs=3338)
+
+#map
+ggplot()+
+ # geom_sf(data=ak_dd%>%st_shift_longitude())+
+  #geom_point(data=lkp, aes(x=lon360, y= latitude, color=depth_strata, fill= depth_strata))+
+  geom_sf(data=lkp, aes(color=depth_strata, fill= depth_strata), size=1)+
+  geom_sf(data=esr%>%
+            filter(Ecosystem_Area == "Gulf of Alaska"), 
+          color="black", fill=NA)+
+   scale_x_continuous(breaks = seq(0, 360, 10))+
+  ggtitle("OISST")+
+  theme_bw()
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+#plot sample sizes
+lkp%>%
+  group_by(ecosystem_sub, depth_strata)%>%
+  summarize(n_sst=n())%>%
+  ggplot()+
+  geom_col(aes(x=depth_strata, y=n_sst, fill=depth_strata))+
+  facet_wrap(~ecosystem_sub)+
+  ggtitle("OISST")+
+  theme_bw()
+```
+
+```{r, message = FALSE, warning=FALSE}
+#load data from previous step
+sst_10_200<-readRDS("data/oi_10_200.RDS")
+sst_201_1000<-readRDS("data/oi_201_1000.RDS")
+sst_1001<-readRDS("data/oi_1001.RDS")
+sst<-sst_10_200%>%
+  bind_rows(sst_201_1000)%>%
+  bind_rows(sst_1001)
+
+#summarize for plot
+sst_sum<-sst %>%
+  rename_with(tolower)%>%
+  mutate(day=day(read_date),
+         month=month(read_date),
+         year=year(read_date),
+         newdate=as.Date(paste("2000",month,day,sep="-"),format="%Y-%m-%d"))%>%
+  group_by(ecosystem_sub, depth_strata, newdate)%>%
+  summarise(oisst=mean(oi_sst),
+            sd_sst=sd(oi_sst))
+
+
+#plot goa
+sst_sum%>%
+  filter(ecosystem_sub%in% c("Eastern Gulf of Alaska", "Western Gulf of Alaska"))%>%
+  ggplot()+
+  geom_line(aes(x=newdate, y=oisst, color=depth_strata), size=1)+
+    geom_line(aes(x=newdate, y=oisst+sd_sst, color=depth_strata), lty=2)+
+    geom_line(aes(x=newdate, y=oisst-sd_sst, color=depth_strata), lty=2)+
+  facet_wrap(~ecosystem_sub)+
+        scale_x_date(date_breaks="1 month",
+                   date_labels = "%b",
+                   expand = c(0.025,0.025)) + 
+  xlab("date")+
+  ylab("OISST")+
+  theme_bw()
+```
+
+```{r, message = FALSE, warning=FALSE}
+#prepare sst data for heatwaveR code
+sst<-sst %>% rename_with(tolower)   %>%
+         mutate(t=as.Date(read_date,format="%Y-%m-%d"),
+                temp=oi_sst)
+
+#function to detect mhw events for each region and depth strata
+mhwfun<- function(x, region, strata) {
+  (detect_event(ts2clm(x %>% filter(ecosystem_sub==region & depth_strata==strata)%>%
+         arrange(t), climatologyPeriod = c("1985-01-01", "2014-12-31"))))$clim %>%
+    mutate(ecosystem_sub=region, depth_strata=strata)
+}
+
+#test
+egoa_10_mhw<-mhwfun(sst,"Eastern Gulf of Alaska", "-10 to -200")
+
+#blank dataframe for loop
+mhw_clim<-egoa_10_mhw[0,]
+
+eco_vec<-unique(sst$ecosystem_sub)
+depth_vec<-unique(sst$depth_strata)
+
+#loop function
+for (i in eco_vec) {
+  for (j in depth_vec) {
+mhw_clim<-mhw_clim%>%
+  bind_rows(mhwfun(x=sst, region=i, strata=j))
+  }
+}
+
+hcol<-"#ffc866"
+
+#plotting function
+mhwplotfun<-function(x, region){
+  ggplot(data=x%>%filter(ecosystem_sub==region))+
+  geom_rect(aes(xmin = t, xmax = t,
+                  ymin = -Inf, ymax = Inf,
+                  color = event)) +
+  geom_line(aes(x=t, y=temp-seas))+
+  facet_grid(rows=vars(depth_strata))+
+  scale_color_manual(values=c("white", "#ffc866"))+
+   #  scale_fill_manual(values=c("white", hcol))+
+    ggtitle(paste0(region," heatwaves-OISST"))+
+    scale_x_date(#limits=c(xmin, xmax), 
+                 expand = c(0, 0))+
+  theme(legend.position = "none",
+        panel.border=element_rect(fill=NA))
+}
+
+
+ggplot(mhw_clim%>%filter(ecosystem_sub=="Eastern Gulf of Alaska"), aes(t, temp-seas)) + 
+    geom_rect(aes(xmin = t, xmax = t,
+                  ymin = -Inf, ymax = Inf,
+                  color = event),
+              size = 0.7,
+              show.legend = FALSE) +
+    geom_line()
+
+#plot all
+for (i in eco_vec) {
+  print(mhwplotfun(x=mhw_clim, region=i))
+}
+
+             
+```
