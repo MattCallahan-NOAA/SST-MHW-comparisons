@@ -1,0 +1,244 @@
+---
+title: "GOA threshold maps"
+author: "Matt Callahan"
+format: html
+editor: visual
+---
+
+## GOA threshold maps
+
+Emily:
+
+Can you make a spatial map of the MHW temperature threshold (90th percentile - climatology) for each location (across both ESR regions)? This may vary over time, so maybe an annual mean, and then the mean difference for each of the 4 seasons?
+
+Similarly, can you plot what the 90th percentile temperature is at each location?
+
+## Data:
+
+climatology used for coral reef watch's cell by cell mhw calculations is available from NESDIS. I just downloaded that rather than recalculating from AKFIN.
+
+```{r include=FALSE, eval=FALSE}
+
+#don't run this
+#load packages
+library(tidync)
+library(tidyverse)
+library(lubridate)
+require(sf)
+require(akmarineareas2)
+library(plotly)
+
+# download files from https://www.star.nesdis.noaa.gov/pub/sod/mecb/crw/data/marine_heatwave/v1.0.1/climatology/nc/
+
+#test file download
+
+download.file(url = "https://www.star.nesdis.noaa.gov/pub/sod/mecb/crw/data/marine_heatwave/v1.0.1/climatology/nc/noaa-crw_mhw_v1.0_climatology_002.nc", method = "libcurl", mode="wb",destfile = "data/noaa-crw_mhw_v1.0_climatology_002.nc")
+
+# make a character vector of 001:365
+sindig<-paste0(rep("00",9), 1:9)
+dubdig<-paste0(rep("0", 90), 10:99)
+trpdig<-as.character(100:365)
+myday <- c(sindig, dubdig, trpdig)
+
+#download all data
+for(i in myday){
+  file_name <- paste0("data/mhw_climatology/noaa-crw_mhw_v1.0_climatology_",i,".nc")
+  download.file(url = paste0("https://www.star.nesdis.noaa.gov/pub/sod/mecb/crw/data/marine_heatwave/v1.0.1/climatology/nc/noaa-crw_mhw_v1.0_climatology_",i,".nc"),
+                method = "libcurl", mode="wb",destfile = file_name)
+}
+
+```
+
+Processing
+
+1\) inner join with crw lkp table and save as RDS
+
+```{r, include=FALSE, eval=FALSE}
+#load crw lookup table
+lkp<-readRDS("data/crw_spatial_lookup.RDS")%>%
+  rename_with(tolower)%>%
+  filter(ecosystem=="Gulf of Alaska") %>%
+  mutate(latitude=round(latitude,3), longitude=round(longitude,3))%>%
+  dplyr::select(longitude, latitude) 
+
+
+# function to convert to table, clip to table and convert dates
+clipfx<-function(x) {
+  infile<-paste0("data/mhw_climatology/noaa-crw_mhw_v1.0_climatology_",x,".nc")
+  outfile<-paste0("data/mhw_climatology/goa_mhw_climatology_",x,".rds")
+  tidync(infile) %>% 
+  hyper_tibble() %>%
+    mutate(lat=round(lat,3), lon=round(lon,3))%>%
+    #inner_join(lkp, by=c("longitude"="longitude", "latitude"="latitude")) %>%
+    inner_join(lkp, by=c("lon"="longitude", "lat"="latitude")) %>%
+    mutate(date=as_datetime(time),
+           doy=yday(date))%>%
+    saveRDS(outfile)
+}
+
+#test
+clipfx("001")
+test<-readRDS("data/mhw_climatology/goa_mhw_climatology_001.rds")
+ggplot()+geom_point(data=lkp, aes(x=longitude, y=latitude),color="red", size=4)+
+        geom_point(data=mhw, aes(x=lon, y=lat))+
+  geom_point(data=test, aes(x=lon, y=lat), color="gold")+
+  xlim(c(-150, -149))+ylim(c(55,55.5))
+
+#Run for all years
+lapply(myday, function(x) clipfx(x)) 
+#worked up to 80 then got some BS error...
+test2<-readRDS("data/mhw_climatology/goa_mhw_climatology_080.rds")
+# try again
+lapply(myday[81:365], function(x) clipfx(x))
+```
+
+2\) combine into a big data frame
+
+```{r, include=FALSE}
+library(tidyverse)
+library(lubridate)
+require(sf)
+require(akmarineareas2)
+library(plotly)
+
+# make a character vector of 001:365
+sindig<-paste0(rep("00",9), 1:9)
+dubdig<-paste0(rep("0", 90), 10:99)
+trpdig<-as.character(100:365)
+myday <- c(sindig, dubdig, trpdig)
+
+#combine into data frame
+mhw <- lapply(myday, function(x) readRDS(paste0("data/mhw_climatology/goa_mhw_climatology_",x,".rds"))) %>%
+  bind_rows()
+
+#reduce data frame
+mhw<-mhw %>%
+  mutate(meansst=sst_clim_mean,
+         percentile_90=sst_clim_ninetieth_percentile_variable) %>%
+  dplyr::select(meansst, percentile_90, doy, lon, lat)
+```
+
+3\) Calculate season
+
+```{r, include=FALSE}
+#assume data frame with DOY, meansst, 90th_percentile, latitude, longitude
+
+# define thresh_mean_diff and season
+mhw<-mhw %>%
+  mutate(thresh_mean_diff=percentile_90-meansst,
+         season=ifelse(doy <=59, "winter",
+                        ifelse(doy<=151, "spring",
+                               ifelse(doy<=243, "summer",
+                                      ifelse(doy<=334, "fall", "winter")))))
+
+mhw_seas<-mhw %>%group_by(lat, lon, season) %>%
+  summarize(seas_meansst=mean(meansst),
+            seas_mean_thresh=mean(percentile_90),
+            seas_mean_diff=mean(percentile_90-meansst))
+
+mhw_seas<-mhw_seas %>% 
+  mutate(season=fct_relevel(season, c("winter", "spring", "summer", "fall")))
+
+```
+
+4\) Group the daily heatwave data for the GOA by adfg stat area and week
+
+```{r, include=FALSE}
+#pull in stat areas
+lkp<-readRDS("data/crw_spatial_lookup.RDS")%>%
+  rename_with(tolower) %>%
+  filter(ecosystem=="Gulf of Alaska") %>%
+  mutate(latitude=round(latitude,3), longitude=round(longitude,3))%>%
+  dplyr::select(longitude, latitude, stat_area)
+
+mhw_stat <-mhw %>% 
+  left_join(lkp, by=c("lon"="longitude","lat"="latitude")) %>%
+  group_by(stat_area, doy) %>%
+  summarize(lon=mean(lon),
+            lat=mean(lat),
+            adfg_sst=mean(meansst),
+            adfg_90=mean(percentile_90),
+            adfg_diff=mean(thresh_mean_diff))
+
+#still too big and slow, group by week
+mhw_stat <-mhw_stat %>%
+  mutate(week=ceiling(doy/7)) %>%
+  group_by(stat_area, week) %>%
+  summarize(lon=mean(lon),
+            lat=mean(lat),
+            adfg_sst=mean(adfg_sst),
+            adfg_90=mean(adfg_90),
+            adfg_diff=mean(adfg_diff))
+
+
+```
+
+## Maps
+
+```{r, fig.height=10, fig.width=8, echo=FALSE, warning=FALSE, message=FALSE}
+#start with seasonal plots (easier)
+ext<-st_bbox(esr_dd %>% filter(Ecosystem_Area=="Gulf of Alaska"))
+#plot meanssst
+ggplot()+
+  geom_sf(data=ak_dd%>%st_transform(crs=4326))+
+  geom_point(data=mhw_seas, aes(x=lon, y=lat, color=seas_meansst))+
+  facet_wrap(~season, nrow=4)+
+  xlim(c(ext[1],ext[3]))+ylim(c(ext[2], ext[4]))+
+  scale_color_viridis_c()+
+    ggtitle("GOA seasonal average sst")+
+    theme_bw()
+
+ggplot()+
+  geom_point(data=mhw_seas, aes(x=lon, y=lat, color=seas_mean_thresh))+
+  facet_wrap(~season, nrow=4)+
+  scale_color_viridis_c()+
+  ggtitle("GOA seasonal average mhw threshold (90th percentile)")+
+  theme_bw()
+
+ggplot()+
+  geom_point(data=mhw_seas, aes(x=lon, y=lat, color=seas_mean_diff))+
+  facet_wrap(~season, nrow=4)+
+  scale_color_viridis_c()+
+  ggtitle("GOA seasonal average threshold magnitude (90th percentile-mean)")+
+  theme_bw()
+
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+fig1 <- mhw_stat %>%
+  plot_ly(
+    x=~lon,
+    y=~lat,
+    color=~adfg_sst,
+    frame=~week,
+    type='scatter',
+    mode='markers',
+    showlegend=T)%>%
+        layout(title = 'weekly mean sst by adfg area')
+fig1
+
+fig2 <- mhw_stat %>%
+  plot_ly(
+    x=~lon,
+    y=~lat,
+    color=~adfg_90,
+    frame=~week,
+    type='scatter',
+    mode='markers',
+    showlegend=T)%>%
+        layout(title = 'weekly mean 90th percentile by adfg area')
+fig2
+
+fig3 <- mhw_stat %>%
+  plot_ly(
+    x=~lon,
+    y=~lat,
+    color=~adfg_diff,
+    frame=~week,
+    type='scatter',
+    mode='markers',
+    showlegend=T)%>%
+        layout(title = 'weekly mean 90th percentile-meansst by adfg area')
+fig3
+```
