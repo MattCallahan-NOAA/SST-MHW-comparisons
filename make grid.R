@@ -102,3 +102,5 @@ ggplot()+
   xlim(c(-180,-132))+
   scale_color_viridis_c()
 
+write.csv(crw_id, "data/grid/crw_lkp_goa_grid.csv", row.names = FALSE)
+
