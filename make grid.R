@@ -75,3 +75,30 @@ grid_id <- grid_id %>% data.frame()
 grid_id <- grid_id %>% dplyr::select(id, longitude, latitude)
 
 write.csv(grid, "data/grid/grid_025latx05lon_cent.csv", row.names=FALSE)
+
+
+# modify crw lookup table to include grid
+crw<-crw %>%
+  mutate(crw_id=id) %>%
+  dplyr::select(-id)
+
+crw_sf <-st_as_sf(crw %>% 
+                    mutate(LAT=latitude,
+                           LON=longitude), 
+                  coords = c("LON", "LAT"),crs=4326)
+
+grid_poly_id <-grid_poly_id %>%
+  mutate(goa_id=id) %>%
+  dplyr::select(-id)
+  
+crw_sf_id <-st_join(crw_sf, grid_poly_id, join=st_within)
+
+crw_id <- crw_sf_id %>% data.frame() %>%
+  dplyr::select(-geometry)
+
+#plot
+ggplot()+
+  geom_point(data=crw_id, aes(x=longitude, y=latitude, color=goa_id))+
+  xlim(c(-180,-132))+
+  scale_color_viridis_c()
+
