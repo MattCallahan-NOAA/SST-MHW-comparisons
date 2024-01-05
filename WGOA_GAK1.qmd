@@ -1,0 +1,178 @@
+---
+title: "WGOA-GAK1 SST comparisons"
+author: "Matt Callahan"
+format: html
+editor: visual
+---
+
+## Motivation
+
+We want to compare SST values from GAK1 with the western Gulf of Alaska. The WGOA is the approximate habitat of interest for a simulated pollock population in the GOA, Simulations go back to 1970, much earlier than the 1985 Coral Reef Watch SST start date. GAK1 offers real mooring temperature data beginning in 1970. To test the applicability of the GAK1 data as a proxy for the WGOA we compare the datasets here.
+
+First we compare CRW SST at the location of GAK1 with averaged SST for the WGOA ecological region.
+
+1\) Download the WGOA time series through the AKIFN api
+
+```{r}
+library(httr)
+library(tidyverse)
+library(odbc)
+library(getPass)
+library(akmarineareas2)
+library(sf)
+library(lubridate)
+
+wgoa<-httr::content(httr::GET(url='https://apex.psmfc.org/akfin/data_marts/akmp/ecosystem_sub_crw_avg_sst?ecosystem_sub=Western%20Gulf%20of%20Alaska&start_date=19850101&end_date=20251231'), type = "application/json") %>%
+  bind_rows()
+```
+
+2\) Download the CRWSST time series at GAK1
+
+Download the GOA portion of the CRW lookup table.
+
+```{r}
+# connect to the akfin database
+con <- dbConnect(odbc::odbc(), "akfin", UID=getPass(msg="USER NAME"), PWD=getPass())
+
+# download the wgoa points
+lkp<- dbFetch(dbSendQuery(con,
+                           paste0("select *
+from  afsc.erddap_crw_sst_spatial_lookup 
+where ecosystem_sub = 'Western Gulf of Alaska' ")))%>%
+  rename_with(tolower)
+
+#convert to sf object
+lkp<-lkp %>%
+  mutate(LON=longitude, LAT=latitude) %>%
+  st_as_sf(coords = c("LON", "LAT"), crs=4326, agr="constant")
+```
+
+Import the lat/lon coordinates for GAK1.
+
+```{r}
+# Location from Janout et al 2010
+lat <- 59.8
+lon <- -149.5
+
+# convert to dataframe
+gak<-tibble(lat=lat, lon=lon)
+# convert to sf object
+gak<-gak %>%
+  st_as_sf(coords = c("lon", "lat"), crs=4326, agr="constant")
+
+```
+
+Identify the CRW ID closest to GAK1.
+
+```{r}
+#spatial join
+gak<-gak %>%
+  st_join(lkp, join=st_nearest_feature)
+#49887
+
+ggplot()+
+  geom_sf(data=ak %>% st_transform(crs=4326))+
+  geom_sf(data=gak, color="red")+
+  geom_sf(data=lkp, color="blue")+
+  geom_sf_text(data=lkp, aes(label=id))+
+  xlim(c(-149.6, -149.4))+ylim(c(59.75, 59.85))
+# It looks like the join just takes the first of the 3 equal distance points... that's fine. 
+```
+
+Download that CRW time series from AKFIN.
+
+```{r}
+gaksst<-dbFetch(dbSendQuery(con,
+                           paste0("select temp gaksst, read_date
+from  afsc.erddap_crw_sst
+where crw_id = 49887
+order by read_date asc")))%>%
+  rename_with(tolower)
+```
+
+3\) Compare.
+
+```{r}
+# joining by date would be more robust but I am just going to bind cols 
+sst<-gaksst %>%
+  rename(read_date2=read_date) %>%
+  bind_cols(wgoa%>%
+            rename_with(tolower))
+```
+
+Run a linear model on daily temp.
+
+```{r}
+#plot
+ggplot()+
+  geom_point(data=sst, aes(x=gaksst, y=meansst))+
+  stat_smooth(data=sst, aes(x=gaksst, y=meansst), method="lm")
+
+# model
+fit <-lm(meansst ~ gaksst, sst)
+summary(fit)
+
+# interesting, a slope lower than 1 (but over half a degree higher intercetp)
+```
+
+Run a linear model on annual temp.
+
+```{r}
+annualsst<-sst %>% 
+  group_by(year) %>%
+  summarize(gaksst=mean(gaksst),
+            meansst=mean(meansst))
+#plot
+ggplot()+
+  geom_point(data=annualsst, aes(x=gaksst, y=meansst))+
+  stat_smooth(data=annualsst, aes(x=gaksst, y=meansst), method="lm")
+
+# model
+fit2 <-lm(meansst ~ gaksst, annualsst)
+summary(fit2)
+# still pretty close
+```
+
+Run a linear model on spring temp.
+
+```{r}
+#create April May June index
+monthsst<-sst %>%
+  mutate(mon=month(read_date2)) %>%#calculate month
+  filter(mon %in% c(4,5,6)) %>% 
+  group_by(year) %>%
+  summarize(gaksst=mean(gaksst),
+            meansst=mean(meansst))
+#plot
+ggplot()+
+  geom_point(data=monthsst, aes(x=gaksst, y=meansst))+
+  stat_smooth(data=monthsst, aes(x=gaksst, y=meansst), method="lm")
+
+# model
+fit3 <-lm(meansst ~ gaksst, monthsst)
+summary(fit3)
+
+# interesting, somewhat worse in the spring
+
+```
+
+Repeat for winter for kicks
+
+```{r}
+monthsst<-sst %>%
+  mutate(mon=month(read_date2)) %>%#calculate month
+  filter(mon %in% c(10,11,12 & year!=2024)) %>% 
+  group_by(year) %>%
+  summarize(gaksst=mean(gaksst),
+            meansst=mean(meansst))
+#plot
+ggplot()+
+  geom_point(data=monthsst, aes(x=gaksst, y=meansst))+
+  stat_smooth(data=monthsst, aes(x=gaksst, y=meansst), method="lm")
+
+# model
+fit3 <-lm(meansst ~ gaksst, monthsst)
+summary(fit3)
+
+# Here we have a positive slope and the intercept is negative
+```
