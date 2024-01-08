@@ -98,7 +98,13 @@ sst<-gaksst %>%
   rename(read_date2=read_date) %>%
   bind_cols(wgoa%>%
             rename_with(tolower))
+
+# compare means
+mean(sst$gaksst)-mean(sst$meansst)
+
 ```
+
+GAK1 is about 2/3 of a degree warmer than the WGOA shelf on average.
 
 Run a linear model on daily temp.
 
@@ -112,16 +118,23 @@ ggplot()+
 fit <-lm(meansst ~ gaksst, sst)
 summary(fit)
 
-# interesting, a slope lower than 1 (but over half a degree higher intercetp)
+# Slope < 1 
 ```
 
-Run a linear model on annual temp.
+Examine annual temp.
 
 ```{r}
 annualsst<-sst %>% 
+  filter(year!=2024)%>%
   group_by(year) %>%
   summarize(gaksst=mean(gaksst),
             meansst=mean(meansst))
+
+#plot over time
+ggplot(data=annualsst)+
+  geom_line(aes(x=as.numeric(year), y=gaksst), color="turquoise")+
+  geom_line(aes(x=as.numeric(year), y=meansst), color="maroon")
+
 #plot
 ggplot()+
   geom_point(data=annualsst, aes(x=gaksst, y=meansst))+
@@ -130,7 +143,6 @@ ggplot()+
 # model
 fit2 <-lm(meansst ~ gaksst, annualsst)
 summary(fit2)
-# still pretty close
 ```
 
 Run a linear model on spring temp.
@@ -161,7 +173,7 @@ Repeat for winter for kicks
 ```{r}
 monthsst<-sst %>%
   mutate(mon=month(read_date2)) %>%#calculate month
-  filter(mon %in% c(10,11,12 & year!=2024)) %>% 
+  filter(mon %in% c(1,2,3 & year!=2024)) %>% 
   group_by(year) %>%
   summarize(gaksst=mean(gaksst),
             meansst=mean(meansst))
@@ -174,5 +186,5 @@ ggplot()+
 fit3 <-lm(meansst ~ gaksst, monthsst)
 summary(fit3)
 
-# Here we have a positive slope and the intercept is negative
+# Here we have a slope > 1
 ```
