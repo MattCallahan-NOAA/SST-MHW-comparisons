@@ -9,6 +9,8 @@ editor: visual
 
 We want to compare SST values from GAK1 with the western Gulf of Alaska. The WGOA is the approximate habitat of interest for a simulated pollock population in the GOA, Simulations go back to 1970, much earlier than the 1985 Coral Reef Watch SST start date. GAK1 offers real mooring temperature data beginning in 1970. To test the applicability of the GAK1 data as a proxy for the WGOA we compare the datasets here.
 
+## CRW SST @ GAK1 mooring vs WGOA ESR time series
+
 First we compare CRW SST at the location of GAK1 with averaged SST for the WGOA ecological region.
 
 1\) Download the WGOA time series through the AKIFN api
@@ -187,4 +189,40 @@ fit3 <-lm(meansst ~ gaksst, monthsst)
 summary(fit3)
 
 # Here we have a slope > 1
+```
+
+## Seward line vs WGOA SST
+
+Jane pulled the Seward line data for 0-50 m August - December. Here I compare her data with the WGOA regional sst.
+
+```{r}
+seward<-read.csv("data/sewardline/sewardline_0-50m.csv") %>%
+  rename(seward_temp=temp)
+
+wgoa_late <- wgoa %>%
+  rename_with(tolower) %>%
+  mutate(date=as_date(read_date),
+           mon=month(date),
+         year=as.integer(year)) %>%
+  filter(mon>=8) %>%
+  group_by(year) %>%
+  summarise(crwsst=mean(meansst))
+
+sst2 <-seward %>%
+  full_join(wgoa_late, by="year")
+
+ggplot(data=sst2)+
+  geom_line(aes(x=year, y=seward_temp), color="turquoise")+
+  geom_line(aes(x=year, y=crwsst), color="maroon")
+```
+
+Not nearly as good looking as the purely crw sst data...
+
+```{r}
+ggplot()+
+  geom_point(data=sst2, aes(x=seward_temp, y=crwsst))+
+  stat_smooth(data=sst2, aes(x=seward_temp, y=crwsst), method="lm")
+
+fit4<-lm(crwsst~seward_temp, sst2)
+summary(fit4)
 ```
